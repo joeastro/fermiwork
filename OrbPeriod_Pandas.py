@@ -1,26 +1,14 @@
 #!/usr/bin/env python
 
-# Orbit period (synodic) prediction for Fermi
-# The purpose of this script is to use a weekly eclipse file to generate 
-# a plot & print values for the expected orbital period for upcoming 
-# mission  weeks. This should aid in providing more accurate initial 
-# estimates for profile repeat periods prior to running the planning 
-# software (i.e. TAKO).
-#
-# Written by Joe Eggen: Nov. 08, 2024
-
-import os
 import sys
 import math
-import csv
-import glob
-from datetime import datetime, timedelta
+import pandas as pd
 import numpy as np
 from astropy.time import Time
 import matplotlib.pyplot as plt
 
 def query_yes_no(question, default="yes"):
-    """Ask a yes/no question via input() and return their answer.
+    """Ask a yes/no question via raw_input() and return their answer.
 
     "question" is a string that is presented to the user.
     "default" is the presumed answer if the user just hits <Enter>.
@@ -42,7 +30,7 @@ def query_yes_no(question, default="yes"):
 
     while True:
         sys.stdout.write(question + prompt)
-        choice = input().lower()
+        choice = raw_input().lower()
         if default is not None and choice == '':
             return valid[default]
         elif choice in valid:
@@ -76,32 +64,26 @@ def datetime_to_mjd(dt):
     t = Time(dt, format='datetime')
     return t.mjd
 
-def read_csv(infile):
-    with open(infile, newline='') as file:
-        reader = csv.DictReader(file)
-        data = [row for row in reader]
-    return data
-
+# Function to calculate midEclipse and orbPeriod from a CSV file
 def calculate_midEclipse_and_orbPeriod(infile):
-    # Load the CSV file as a list of dictionaries
-    data = read_csv(infile)
+    # Load the CSV file
+    df = pd.read_csv(infile)
 
     # Drop the first and last rows
-    data = data[1:-1]
-
+    df = df.drop(index=[0, len(df) - 1])
+    
     # Convert the 'Start Time (UTCJFOUR)' and 'Stop Time (UTCJFOUR)' columns to datetime
-    for row in data:
-        row['Start Time (UTCJFOUR)'] = datetime.strptime(row['Start Time (UTCJFOUR)'], '%j/%Y %H:%M:%S.%f')
-        row['Stop Time (UTCJFOUR)'] = datetime.strptime(row['Stop Time (UTCJFOUR)'], '%j/%Y %H:%M:%S.%f')
-
+    df['Start Time (UTCJFOUR)'] = pd.to_datetime(df['Start Time (UTCJFOUR)'], format='%j/%Y %H:%M:%S.%f')
+    df['Stop Time (UTCJFOUR)'] = pd.to_datetime(df['Stop Time (UTCJFOUR)'], format='%j/%Y %H:%M:%S.%f')
+    
     # Calculate the mid-point between the start and stop times
-    midEclipse_dt = [(row['Start Time (UTCJFOUR)'] + (row['Stop Time (UTCJFOUR)'] - row['Start Time (UTCJFOUR)']) / 2) for row in data]
+    midEclipse_dt = (df['Start Time (UTCJFOUR)'] + (df['Stop Time (UTCJFOUR)'] - df['Start Time (UTCJFOUR)']) / 2).tolist()
 
     # Convert mid-point times to Modified Julian Date (MJD)
     midEclipse = [datetime_to_mjd(dt) for dt in midEclipse_dt]
-
-    # Calculate the orbital period between each 'midEclipse' element and the next element in seconds
-    orbPeriod = [(midEclipse[i + 1] - midEclipse[i]) * 86400.0 for i in range(len(midEclipse) - 1)]
+    
+    # Calculate the times between each 'midEclipse' element and the next element in seconds
+    orbPeriod = [(midEclipse[i+1] - midEclipse[i]) * 86400 for i in range(len(midEclipse) - 1)]
 
     return midEclipse, orbPeriod
 
@@ -114,13 +96,12 @@ midEclipse, orbPeriod = calculate_midEclipse_and_orbPeriod(file_path)
 #print("orbPeriod:", max(orbPeriod),min(orbPeriod))    # Displaying first 5 elements for brevity
 
 # Remove the first None value from orbPeriod for plotting
-midEclipse_plotStr = np.array(midEclipse[1:-1])
-midEclipse_plot = midEclipse_plotStr.astype(float)
-orbPeriod_plotStr = np.array(orbPeriod[1:])
-orbPeriod_plot = orbPeriod_plotStr.astype(float)
+midEclipse_plot = midEclipse[1:-1]
+orbPeriod_plot = orbPeriod[1:]
 
 # Determine what mission weeks the eclipse file covers
 firstweek = 54622.0 # MJD of start of MW 001
+#print(midEclipse[0],midEclipse[-1])
 startweek = math.floor((midEclipse[0] - firstweek)/7) + 1
 endweek = math.floor((midEclipse[-1] - firstweek)/7) + 1
 
@@ -136,30 +117,22 @@ while i < (endweek - startweek):
 
 # Load the beta angles file
 beta_file_path = '/Users/jeggen/FERMI/FSSCtesting/OrbPeriod/beta_angles.txt'
+beta_df = pd.read_csv(beta_file_path, sep=r'\s+', header=None)
 
 # Use the first six columns to form a timestamp and the last column for beta angles
-# Since we can't use the pandas package the process is somewhat convoluted
-def read_first_six_columns(filename):
-    with open(filename, newline='') as csvfile:
-        reader = csv.reader(csvfile,delimiter=' ')
-        data = [row[:6] for row in reader]  # Slice to get the first six columns
-    return data
-def read_last_column(filename):
-    with open(filename, newline='') as csvfile:
-        reader = csv.reader(csvfile,delimiter=' ')
-        data = [row[-1] for row in reader if row]  # Get the last column of each row, ensure the row is not empty
-    return data
-timestamps = read_first_six_columns(beta_file_path)
-beta_angles = read_last_column(beta_file_path)
+timestamps = beta_df.iloc[:, :6]
+beta_angles = beta_df.iloc[:, -1]
 
 # Create datetime objects from the first six columns
-date_format = '%Y %m %d %H %M %S'
-datetimes = [datetime.strptime(str(row[0])+' '+str(row[1])+' '+ str(row[2])+' '+ str(row[3])+' '+ str(row[4])+' '+ str(row[5]),date_format) for row in timestamps]
+timestamps['datetime'] = pd.to_datetime(timestamps.apply(lambda row: f'{row[0]}-{row[1]:02d}-{row[2]:02d} {row[3]:02d}:{row[4]:02d}:{row[5]:02d}', axis=1))
 
 # Convert to Modified Julian Date (MJD)
-betaMJD = np.array([datetime_to_mjd(dt) for dt in datetimes])
-betaAngleStr = np.array(beta_angles)
-betaAngle = betaAngleStr.astype(float)
+betaMJD = [datetime_to_mjd(dt) for dt in timestamps['datetime']]
+betaAngle = beta_angles.tolist()
+
+# Print the first few entries of betaMJD and betaAngle for verification
+#print("Beta arrays:",str(len(betaMJD)),str(len(betaAngle)))
+#betaMJD[:5], betaAngle[:5]
 
 # Calculate start times of each mission week
 mission_week_start = 54622.0
@@ -213,8 +186,7 @@ for i in range(len(startMW) - 1):
     # Calculate statistics within each mission week
     mask = (midEclipse_plot >= start_time) & (midEclipse_plot < end_time)
     mw_orbPeriod = np.array(orbPeriod_plot)[mask]
-    mw_betaAngle = betaAngle[(np.array(betaMJD) >= start_time) & (np.array(betaMJD) < end_time)]
-    mw_betaAngle = np.array(mw_betaAngle)
+    mw_betaAngle = np.array(betaAngle)[(np.array(betaMJD) >= start_time) & (np.array(betaMJD) < end_time)]
     
     mean_orbPeriod = round(np.mean(mw_orbPeriod),2)
     min_orbPeriod = round(np.min(mw_orbPeriod),2)
