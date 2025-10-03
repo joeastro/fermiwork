@@ -8,6 +8,9 @@
 # software (i.e. TAKO).
 #
 # Written by Joe Eggen: Nov. 08, 2024
+#
+# 10/03/2025 - added feature to print the date/time of a profile change
+#              based on beta angle (detect_beta_crossings_in_range).
 
 import os
 import sys
@@ -64,7 +67,7 @@ if len(sys.argv) == 1:
     infile = latestFile
   else:
     print("Please provide the name of the eclipse file that you wish to use (with full path):")
-    infile = raw_input()
+    infile = input()
   print("Using default eclipse file:",infile)
 # User types nonsense...
 if len(sys.argv) > 2:
@@ -105,6 +108,65 @@ def calculate_midEclipse_and_orbPeriod(infile):
 
     return midEclipse, orbPeriod
 
+def detect_beta_crossings_in_range(betaMJD, betaAngle, datetimes):
+    """
+    Detect when beta angle crosses threshold values within a specific time range.
+    """
+    if len(betaAngle) < 2:
+        return
+    
+    # Define thresholds
+    thresholds = [-24, -14, 14, 24]
+    
+    # Track previous state to detect crossings
+    prev_angle = betaAngle[0]
+    
+    for i in range(1, len(betaAngle)):
+        curr_angle = betaAngle[i]
+        curr_datetime = datetimes[i]
+        day_of_year = curr_datetime.timetuple().tm_yday
+
+        # Check for crossings of each threshold
+        for threshold in thresholds:
+            # Detect crossing (previous and current angles are on opposite sides of threshold)
+            if (prev_angle <= threshold < curr_angle) or (prev_angle >= threshold > curr_angle):
+                
+                # Format the date/time string
+                date_time_str = curr_datetime.strftime("%Y-%m-%d %H:%M:%S")
+                
+                
+                # Determine which range we're entering and print appropriate message
+                if threshold == 14 and curr_angle > 14:
+                    if curr_angle <= 24:
+                        print(f"Switch to +50/-60 deg. asymmetric profile by {date_time_str} (DoY {day_of_year})")
+                    else:
+                        print(f"Switch to +50 deg. modified sine profile by {date_time_str} (DoY {day_of_year})")
+                elif threshold == -14 and curr_angle < -14:
+                    if curr_angle >= -24:
+                        print(f"Switch to -50/+60 deg. asymmetric profile by {date_time_str} (DoY {day_of_year})")
+                    else:
+                        print(f"Switch to -50 deg. modified sine profile by {date_time_str} (DoY {day_of_year})")
+                elif threshold == 24 and curr_angle > 24:
+                    print(f"Switch to +50 deg. modified sine profile by {date_time_str} (DoY {day_of_year})")
+                elif threshold == -24 and curr_angle < -24:
+                    print(f"Switch to -50 deg. modified sine profile by {date_time_str} (DoY {day_of_year})")
+                elif threshold == -24 and curr_angle > -24:
+                    print(f"Switch to -50/+60 deg. asymmetric  profile by {date_time_str} (DoY {day_of_year})")
+                elif threshold == 14 and curr_angle < 14 and prev_angle > 14:
+                    if curr_angle >= -14:
+                        print(f"Switch to +-50 deg. symmetric profile by {date_time_str} (DoY {day_of_year})")
+                elif threshold == -14 and curr_angle > -14 and prev_angle < -14:
+                    if curr_angle <= 14:
+                        print(f"Switch to +-50 deg. symmetric profile by {date_time_str} (DoY {day_of_year})")
+        prev_angle = curr_angle
+
+# Load the beta angles file
+beta_file_path = '/Home/lhea2/gsscops/beta_angles.txt'
+
+# Get unique filename for output plot
+figstem = infile.split('/')[-1]
+figName = figstem+'.predict.png'
+
 # Example usage
 file_path = infile
 midEclipse, orbPeriod = calculate_midEclipse_and_orbPeriod(file_path)
@@ -133,9 +195,6 @@ while i < (endweek - startweek):
     starttime = (startweek + i)*7 + firstweek
     weektimes.append(starttime)
     i+=1
-
-# Load the beta angles file
-beta_file_path = '/Users/jeggen/FERMI/FSSCtesting/OrbPeriod/beta_angles.txt'
 
 # Use the first six columns to form a timestamp and the last column for beta angles
 # Since we can't use the pandas package the process is somewhat convoluted
@@ -192,7 +251,7 @@ ax1.legend(loc='lower left')
 ax2 = ax1.twinx()
 color = 'tab:blue'
 ax2.set_xlabel('Modified Julian Date (MJD)')
-ax2.set_ylabel('Orbital Period (seconds)', color=color)
+ax2.set_ylabel('Synodic Orbital Period (seconds)', color=color)
 ax2.plot(midEclipse_plot, orbPeriod_plot, marker='o', linestyle='-', color=color, label='Orbital Period')
 ax2.tick_params(axis='y', labelcolor=color)
 ax2.legend(loc='lower right')
@@ -215,6 +274,11 @@ for i in range(len(startMW) - 1):
     mw_orbPeriod = np.array(orbPeriod_plot)[mask]
     mw_betaAngle = betaAngle[(np.array(betaMJD) >= start_time) & (np.array(betaMJD) < end_time)]
     mw_betaAngle = np.array(mw_betaAngle)
+
+    # Get beta angle data for this mission week
+    beta_mask = (np.array(betaMJD) >= start_time) & (np.array(betaMJD) < end_time)
+    mw_betaMJD = np.array(betaMJD)[beta_mask]
+    mw_datetimes = np.array(datetimes)[beta_mask]
     
     mean_orbPeriod = round(np.mean(mw_orbPeriod),2)
     min_orbPeriod = round(np.min(mw_orbPeriod),2)
@@ -227,7 +291,13 @@ for i in range(len(startMW) - 1):
     print(f'Mean Orbital Period: {mean_orbPeriod}')
     print(f'Start/Stop MJD: {start_time}'+'/'+f'{end_time}')
     print(f'Min/Max Orbital Period: {min_orbPeriod}'+'/'+f'{max_orbPeriod}')
-    print(f'Min/Max Beta Angle: {min_betaAngle}'+'/'+f'{max_betaAngle}\n')
+    print(f'Min/Max Beta Angle: {min_betaAngle}'+'/'+f'{max_betaAngle}')
+
+    # Check for beta angle threshold crossings within this mission week
+    if len(mw_betaAngle) > 1:  # Need at least 2 points to detect crossings
+        detect_beta_crossings_in_range(mw_betaMJD, mw_betaAngle, mw_datetimes)
+    
+    print()  # Add blank line between mission weeks
     
     # Annotate the mission week number in the plot
     mid_point = (start_time + end_time) / 2
@@ -239,7 +309,9 @@ for i in range(len(startMW) - 1):
 # Set limits based on midEclipse_plot
 plt.xlim(min(midEclipse_plot), max(midEclipse_plot))
 
-plt.title('Orbital Period and Beta Angle vs. Time')
+plt.title('Synodic Orbital Period and Beta Angle vs. Time')
 plt.grid(True)
 fig.tight_layout()
-plt.show()
+#plt.show()
+print("Plot of orbit period saved to file: "+figName)
+plt.savefig(figName)
